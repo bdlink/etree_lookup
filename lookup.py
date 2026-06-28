@@ -128,6 +128,7 @@ def _empty_result(concert: dict) -> dict:
         "ambiguous_upgrades": {},
         "ambiguous_metadata":  {},
         "ambiguous_subset_note": {},
+        "ambiguous_identical_note": {},
         "artist":           None,
         "date":             None,
         "venue":            None,

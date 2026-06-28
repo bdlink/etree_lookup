@@ -61,6 +61,7 @@ def _build_empty_result() -> dict:
         "ambiguous_upgrades": {},
         "ambiguous_metadata":  {},
         "ambiguous_subset_note": {},
+        "ambiguous_identical_note": {},
         "artist":           None,
         "date":             None,
         "venue":            None,
@@ -259,6 +260,20 @@ def lookup_shnid(
             shnid_list = [s for s in shnid_list if s not in to_remove]
             ambiguous = len(shnid_list) != 1
 
+    # Identical hash sets: when two candidates have exactly the same hashes,
+    # they represent the same audio in different etreedb entries — flag this.
+    identical_note: dict[str, str] = {}
+    if ambiguous and needs_resolution:
+        for i, a in enumerate(shnid_list):
+            for b in shnid_list[i+1:]:
+                ha = hash_sets.get(a, set())
+                hb = hash_sets.get(b, set())
+                if ha and hb and ha == hb:
+                    identical_note[a] = f"identical audio to {b}"
+                    identical_note[b] = f"identical audio to {a}"
+                    if verbose:
+                        print(f"    SHNID {a} and {b} have identical hash sets")
+
     if ambiguous:
         if verbose:
             print(f"    Ambiguous: {', '.join(shnid_list)}")
@@ -279,6 +294,7 @@ def lookup_shnid(
             "ambiguous_upgrades": amb_upgrades,
             "ambiguous_metadata": amb_metadata,
             "ambiguous_subset_note": subset_note,
+            "ambiguous_identical_note": identical_note,
             "matched_hash":       probe_hash,
             "matched_hash_type":  probe_type,
             "queries_made":       queries_made,

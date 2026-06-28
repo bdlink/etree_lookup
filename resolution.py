@@ -226,8 +226,19 @@ def _compare_bodies(
 
     best_failure = _MatchState()
 
-    # Pass 1: check each body individually
-    for desc, body in bodies:
+    # Pass 1: check each body individually.
+    # Sort so shn-md5 is tried before orig-shn-md5 — shn-md5 represents the
+    # actual content of this specific etreedb entry and is more discriminating.
+    # orig-shn-md5 may be shared across multiple sources (e.g. 5649 and 5650
+    # share the same orig-shn-md5 body, but have different shn-md5 bodies).
+    def _body_sort_key(desc_body):
+        desc = desc_body[0].lower()
+        order = {"shn-md5": 0, "flac-md5": 1, "ffp": 2, "flac-ffp": 3,
+                 "st5": 4, "orig-shn-md5": 5}
+        return order.get(desc, 99)
+    sorted_bodies = sorted(bodies, key=_body_sort_key)
+
+    for desc, body in sorted_bodies:
         cand_md5, cand_ffp, cand_st5 = extract_hashes(body, desc, use_st5=True)
         any_cand_md5 |= cand_md5
         any_cand_ffp |= cand_ffp

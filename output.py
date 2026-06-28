@@ -67,13 +67,15 @@ def _write_text(results: list[dict], f: IO, errors_only: bool = False):
             f.write(f"SHNID  : AMBIGUOUS\n")
             amb_meta     = r.get("ambiguous_metadata") or {}
             amb_upgrades = r.get("ambiguous_upgrades") or {}
-            subset_notes = r.get("ambiguous_subset_note") or {}
+            subset_notes    = r.get("ambiguous_subset_note") or {}
+            identical_notes = r.get("ambiguous_identical_note") or {}
             for s in r.get("shnid_list", []):
                 meta     = amb_meta.get(str(s)) or {}
                 upgrades = amb_upgrades.get(str(s)) or []
                 chain    = " → ".join(
                     [str(s)] + [str(u["shnid"]) for u in upgrades])
-                note     = subset_notes.get(str(s), "")
+                note = (subset_notes.get(str(s), "") or
+                        identical_notes.get(str(s), ""))
                 f.write(f"  Candidate {chain}"
                         f"{f' ({note})' if note else ''}:\n")
                 f.write(f"    Artist : {meta.get('artist') or '—'}\n")
