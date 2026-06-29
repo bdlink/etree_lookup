@@ -9,6 +9,9 @@ venv/
 .venv/
 env/
 
+# Generated index
+torrent_index.json
+
 # Test output
 results.csv
 results.json

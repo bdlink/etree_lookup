@@ -46,9 +46,14 @@ from torrent_index import build_index, load_index, index_path_default
 # ---------------------------------------------------------------------------
 
 def scan_concerts(root: Path, verbose: bool = False,
-                  ffp_only: bool = False) -> list[dict]:
+                  ffp_only: bool = False,
+                  depth: int = 1) -> list[dict]:
     """
-    Scan each immediate subdirectory of root as one concert folder.
+    Scan concert folders under root.
+
+    depth=1 (default): each immediate subdirectory of root is one concert.
+    depth=2: each subdirectory two levels deep is one concert.
+             Level-1 directories that contain no subdirectories are skipped.
 
     Preferred checksum files (.ffp, .md5, plain .st5) are used when present.
     Fallback files (.flac.st5, .shn.st5.txt) are used only when no preferred
@@ -59,10 +64,27 @@ def scan_concerts(root: Path, verbose: bool = False,
     """
     concerts = []
 
-    subdirs = sorted(d for d in root.iterdir() if d.is_dir())
-    if not subdirs:
-        print(f"WARNING: No subdirectories found in {root}", file=sys.stderr)
-        return concerts
+    if depth == 2:
+        # Collect all level-2 subdirectories
+        level1_dirs = sorted(d for d in root.iterdir() if d.is_dir())
+        if not level1_dirs:
+            print(f"WARNING: No subdirectories found in {root}", file=sys.stderr)
+            return concerts
+        concert_dirs = []
+        for level1 in level1_dirs:
+            level2 = sorted(d for d in level1.iterdir() if d.is_dir())
+            if not level2:
+                # Level-1 has no subdirs (e.g. compilation with files) — skip
+                if verbose:
+                    print(f"  Skipping {level1.name}: no concert subfolders")
+                continue
+            concert_dirs.extend(level2)
+        subdirs = concert_dirs
+    else:
+        subdirs = sorted(d for d in root.iterdir() if d.is_dir())
+        if not subdirs:
+            print(f"WARNING: No subdirectories found in {root}", file=sys.stderr)
+            return concerts
 
     for folder in subdirs:
         checksum_files = find_checksum_files(folder)
@@ -192,6 +214,12 @@ def main():
     parser.add_argument("--errors-only", action="store_true",
                         help="Only output not-found, failed, and ambiguous results")
     parser.add_argument(
+        "--depth", type=int, default=1, choices=[1, 2],
+        help="Folder depth for concert scanning (default: 1). "
+             "Use 2 for Torrent-style collections where concerts are "
+             "one level inside collection folders.",
+    )
+    parser.add_argument(
         "--torrent-dir", metavar="DIR",
         help="Torrent folder to check for existing SHNIDs (two levels deep)",
     )
@@ -238,7 +266,8 @@ def main():
         sys.exit(1)
 
     print(f"Scanning: {root}", file=sys.stderr)
-    concerts = scan_concerts(root, verbose=args.verbose, ffp_only=args.ffp_only)
+    concerts = scan_concerts(root, verbose=args.verbose, ffp_only=args.ffp_only,
+                             depth=args.depth)
 
     if not concerts:
         print("No concert folders with checksum files found.", file=sys.stderr)

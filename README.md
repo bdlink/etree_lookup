@@ -21,8 +21,9 @@ precise verification, upgrade chain display, and folder renaming.
 | `api.py` | GraphQL queries and HTTP transport |
 | `resolution.py` | Local hash comparison against etreedb bodies |
 | `upgrades.py` | Upgrade chain traversal |
-| `rename.py` | Folder annotation and renaming |
+| `rename.py` | Folder annotation and renaming (with torrent markers) |
 | `parsers.py` | Checksum file discovery and parsing |
+| `torrent_index.py` | Build and query SHNID index from Torrent folder |
 | `output.py` | Text / CSV / JSON formatters |
 
 ## Quick start
@@ -60,6 +61,9 @@ Audio files can be `.shn` or `.flac`. File selection is by extension only
 | `--ffp-only` | off | Only process folders that contain a `.ffp` file |
 | `--precise` | off | Verify matches by comparing etreedb checksum bodies |
 | `--errors-only` | off | Only output not-found, failed, and ambiguous results |
+| `--depth 1\|2` | `1` | Folder depth for concert scanning. Use `2` for Torrent-style collections where concerts sit inside collection subfolders |
+| `--torrent-dir DIR` | — | Check matched SHNIDs against a torrent index; marks matches with `*` |
+| `--build-index` | — | Build/rebuild the torrent SHNID index from `--torrent-dir` and exit |
 | `--verbose` / `-v` | off | Show per-hash lookup detail |
 | `--delay SECONDS` | `0.5` | Pause between API calls |
 
@@ -135,6 +139,44 @@ etreedb stores checksum bodies with these descriptions:
 Default delay is 0.5s between API calls. Increase with `--delay` for large
 collections. The tool makes at most 3 API calls per concert (probe +
 optional bulk fetch + upgrade chain).
+
+## Torrent duplicate checking
+
+Build an index of SHNIDs already in your Torrent collection (run once,
+or whenever new torrents are added):
+
+```bash
+# First run — provide the torrent folder path
+python lookup.py ~/Music/GDCloud --build-index --torrent-dir ~/Music/Torrent
+
+# Subsequent rebuilds — path is remembered in torrent_index.json
+python lookup.py ~/Music/GDCloud --build-index
+```
+
+Then use `--torrent-dir` during lookup/rename. SHNIDs (or their upgrades)
+already in the Torrent folder are marked with `*`:
+
+```bash
+# Check a single year folder
+python lookup.py ~/Music/GDCloud/77 --precise --rename --torrent-dir ~/Music/Torrent
+
+# Check an entire Torrent collection (two levels deep)
+python lookup.py ~/Music/Torrent --precise --depth 2 --torrent-dir ~/Music/Torrent
+```
+
+Annotation examples with torrent markers:
+
+| Result | Annotation |
+|--------|-----------|
+| SHNID in torrent | `gd77-05-08 [5002*]` |
+| Upgrade in torrent | `gd72-08-27 [152→2199*]` |
+| Both in torrent | `gd72-08-27 [152*→2199*]` |
+| Imprecise, in torrent | `gd75-09-28 [2562?*]` |
+| Not in torrent | `gd68-03-03 [9374]` (unchanged) |
+
+The `torrent_index.json` file is stored alongside the code and contains
+the path to the Torrent folder so `--build-index` can be run without
+repeating `--torrent-dir`.
 
 ## Extending
 
