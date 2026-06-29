@@ -123,13 +123,15 @@ def group_bodies_by_description(
 
 class MatchDetail:
     """Outcome of comparing one candidate against local hashes."""
-    __slots__ = ("match_type", "missing", "extra")
+    __slots__ = ("match_type", "match_description", "missing", "extra")
 
     def __init__(self, match_type: Optional[str],
-                 missing: list, extra: list):
-        self.match_type = match_type   # "md5" | "ffp" | "st5" | None
-        self.missing    = missing      # local hashes absent from candidate
-        self.extra      = extra        # candidate hashes absent from local set
+                 missing: list, extra: list,
+                 match_description: str = ""):
+        self.match_type        = match_type        # "md5" | "ffp" | "st5" | None
+        self.match_description = match_description # etreedb body description e.g. "orig-shn-md5"
+        self.missing           = missing           # local hashes absent from candidate
+        self.extra             = extra             # candidate hashes absent from local set
 
     @property
     def matched(self) -> bool:
