@@ -282,11 +282,15 @@ def lookup_shnid(
             [int(s) for s in shnid_list if s.isdigit()],
             verbose=verbose, delay=inter_query_delay,
         )
-        # Build per-candidate metadata for display
-        amb_metadata = {
-            s: initial_metadata.get(s, {})
-            for s in shnid_list
-        }
+        # Build per-candidate metadata for display, including match detail
+        amb_metadata = {}
+        for s in shnid_list:
+            meta = dict(initial_metadata.get(s, {}))
+            detail = precise_survivors.get(s)
+            if detail:
+                meta["match_description"] = detail.match_description
+                meta["match_type"]        = detail.match_type
+            amb_metadata[s] = meta
         result = _build_empty_result()
         result.update({
             "shnid_list":         shnid_list,

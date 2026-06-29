@@ -238,6 +238,7 @@ def _compare_bodies(
         return order.get(desc, 99)
     sorted_bodies = sorted(bodies, key=_body_sort_key)
 
+    matched_desc = ""
     for desc, body in sorted_bodies:
         cand_md5, cand_ffp, cand_st5 = extract_hashes(body, desc, use_st5=True)
         any_cand_md5 |= cand_md5
@@ -246,7 +247,8 @@ def _compare_bodies(
         result = _check_one(cand_md5, cand_ffp, cand_st5,
                             local_md5, local_ffp, local_st5)
         if result.matched:
-            return MatchDetail(result.match_type, [], [])
+            matched_desc = desc
+            return MatchDetail(result.match_type, [], [], match_description=desc)
         best_failure.update(result)
 
     # Pass 2: try union of disc-split bodies
@@ -270,7 +272,8 @@ def _compare_bodies(
         result = _check_one(union_md5, union_ffp, union_st5,
                             local_md5, local_ffp, local_st5)
         if result.matched:
-            return MatchDetail(result.match_type, [], [])
+            disc_descs = "+".join(sorted(disc_groups))
+            return MatchDetail(result.match_type, [], [], match_description=disc_descs)
         best_failure.update(result)
 
     # Trust probe only when no comparable pair exists on both sides
@@ -281,7 +284,7 @@ def _compare_bodies(
         (local_st5 and any_cand_st5)
     )
     if not any_comparison_attempted:
-        return MatchDetail("probe", [], [])
+        return MatchDetail("probe", [], [], match_description="probe")
 
     return MatchDetail(None, best_failure.missing, best_failure.extra)
 

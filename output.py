@@ -10,6 +10,7 @@ Extension design:
 
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 from typing import IO
@@ -64,11 +65,36 @@ def _write_text(results: list[dict], f: IO, errors_only: bool = False):
         f.write(f"Folder : {r['folder_name']}\n")
 
         if r.get("ambiguous"):
-            f.write(f"SHNID  : AMBIGUOUS\n")
-            amb_meta     = r.get("ambiguous_metadata") or {}
-            amb_upgrades = r.get("ambiguous_upgrades") or {}
+            amb_meta        = r.get("ambiguous_metadata") or {}
+            amb_upgrades    = r.get("ambiguous_upgrades") or {}
             subset_notes    = r.get("ambiguous_subset_note") or {}
             identical_notes = r.get("ambiguous_identical_note") or {}
+            folder_name     = r.get("folder_name", "")
+
+            # Extract date (YYMMDD or YYYY-MM-DD) and SHNID from folder name
+            folder_date_m = re.search(r'(\d{2,4})[-.]?(\d{2})[-.]?(\d{2})', folder_name)
+            folder_date = ""
+            if folder_date_m:
+                y, mo, d = folder_date_m.groups()
+                if len(y) == 2:
+                    y = "19" + y
+                folder_date = f"{mo}/{d}/{y[2:]}"  # MM/DD/YY to match etreedb format
+
+            folder_shnids = set(re.findall(r'(?<![0-9])([0-9]{3,6})(?![0-9])', folder_name))
+
+            # Find common match description across candidates
+            descs = {str(s): (amb_meta.get(str(s)) or {}).get("match_description", "")
+                     for s in r.get("shnid_list", [])}
+            unique_descs = set(descs.values()) - {"", None}
+            if len(unique_descs) == 1 and "orig-shn-md5" in unique_descs:
+                shared_note = " — matched via orig-shn-md5 (shared original transfer)"
+            elif len(unique_descs) == 1:
+                shared_note = f" — matched via {next(iter(unique_descs))}"
+            else:
+                shared_note = ""
+
+            f.write(f"SHNID  : AMBIGUOUS{shared_note}\n")
+
             for s in r.get("shnid_list", []):
                 meta     = amb_meta.get(str(s)) or {}
                 upgrades = amb_upgrades.get(str(s)) or []
@@ -76,8 +102,27 @@ def _write_text(results: list[dict], f: IO, errors_only: bool = False):
                     [str(s)] + [str(u["shnid"]) for u in upgrades])
                 note = (subset_notes.get(str(s), "") or
                         identical_notes.get(str(s), ""))
+
+                # Hints from folder name
+                hints = []
+                if str(s) in folder_shnids:
+                    hints.append("folder name match")
+                cand_date = (meta.get("date") or "").strip()
+                if folder_date and cand_date:
+                    # Compare MM/DD/YY — normalise both
+                    if folder_date[:5] == cand_date[:5]:
+                        hints.append("date matches folder")
+                    else:
+                        hints.append(f"date {cand_date} ≠ folder {folder_date}")
+
+                match_desc = meta.get("match_description", "")
+                match_type = meta.get("match_type", "")
+                if match_desc and match_desc not in ("probe",):
+                    hints.append(f"matched on {match_desc}")
+
+                all_notes = ", ".join(filter(None, [note] + hints))
                 f.write(f"  Candidate {chain}"
-                        f"{f' ({note})' if note else ''}:\n")
+                        f"{f' ({all_notes})' if all_notes else ''}:\n")
                 f.write(f"    Artist : {meta.get('artist') or '—'}\n")
                 f.write(f"    Date   : {meta.get('date') or '—'}\n")
                 f.write(f"    Venue  : {meta.get('venue') or '—'}\n")
