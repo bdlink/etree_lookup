@@ -23,15 +23,28 @@ _ANNOTATION_RE = re.compile(r"\s*\[.*\]$")
 # Annotation building
 # ---------------------------------------------------------------------------
 
-def _chain_str(shnid: str, upgrades: list[dict]) -> str:
-    """Build an upgrade chain string like '18120→89003→124583'."""
-    parts = [shnid] + [str(u["shnid"]) for u in upgrades]
+def _chain_str(shnid: str, upgrades: list[dict],
+                torrent_shnids: "set[int] | None" = None) -> str:
+    """
+    Build an upgrade chain string like '18120→89003→124583'.
+    If torrent_shnids is provided, appends '*' to any SHNID present in the set.
+    """
+    def mark(s: str) -> str:
+        if torrent_shnids and int(s) in torrent_shnids:
+            return f"{s}*"
+        return s
+
+    parts = [mark(shnid)] + [mark(str(u["shnid"])) for u in upgrades]
     return "→".join(parts)
 
 
-def build_annotation(result: dict) -> str:
+def build_annotation(result: dict,
+                     torrent_shnids: "set[int] | None" = None) -> str:
     """
     Build the bracketed annotation tag for a lookup result.
+
+    If torrent_shnids is provided, any SHNID (or upgrade SHNID) present in
+    the set is marked with '*' to indicate it is already in the Torrent folder.
 
     See module docstring for the full format specification.
     """
@@ -41,10 +54,10 @@ def build_annotation(result: dict) -> str:
 
     # Ambiguous
     if result.get("ambiguous"):
-        shnid_list       = result.get("shnid_list") or []
+        shnid_list         = result.get("shnid_list") or []
         ambiguous_upgrades = result.get("ambiguous_upgrades") or {}
         parts = [
-            _chain_str(str(s), ambiguous_upgrades.get(str(s), []))
+            _chain_str(str(s), ambiguous_upgrades.get(str(s), []), torrent_shnids)
             for s in shnid_list
         ]
         return "[" + "|".join(parts) + "]"
@@ -59,15 +72,17 @@ def build_annotation(result: dict) -> str:
     )
 
     upgrades = result.get("upgrades") or []
-    chain = _chain_str(str(shnid), upgrades)
+    chain = _chain_str(str(shnid), upgrades, torrent_shnids)
 
     if imprecise:
-        # Insert ? after the matched SHNID, before any upgrade arrow
-        if "→" in chain:
-            first, rest = chain.split("→", 1)
-            chain = f"{first}?→{rest}"
+        # Insert ? after the matched SHNID, before any upgrade arrow or *
+        # e.g. 5339?  or  152?→2199*
+        first_arrow = chain.find("→")
+        if first_arrow >= 0:
+            chain = f"{chain[:first_arrow]}?{chain[first_arrow:]}"
         else:
-            chain = f"{chain}?"
+            # Insert ? before any trailing *
+            chain = chain.rstrip("*") + "?" + ("*" if chain.endswith("*") else "")
 
     return f"[{chain}]"
 
@@ -77,14 +92,18 @@ def build_annotation(result: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def rename_folder(folder: Path, result: dict,
-                  verbose: bool = False) -> "Path | None":
+                  verbose: bool = False,
+                  torrent_shnids: "set[int] | None" = None) -> "Path | None":
     """
     Rename ``folder`` by stripping any existing annotation and appending
     the annotation built from ``result``.
 
+    If torrent_shnids is provided, SHNIDs present in the set are marked
+    with '*' in the annotation.
+
     Returns the new Path on success, or None if nothing changed or rename failed.
     """
-    annotation = build_annotation(result)
+    annotation = build_annotation(result, torrent_shnids=torrent_shnids)
     base_name  = _ANNOTATION_RE.sub("", folder.name).rstrip()
     new_name   = f"{base_name} {annotation}"
 

@@ -38,6 +38,7 @@ from parsers import (
 from lookup_etree import lookup_shnid
 from output import print_results, write_results
 from rename import rename_folder
+from torrent_index import build_index, load_index, index_path_default
 
 
 # ---------------------------------------------------------------------------
@@ -150,9 +151,11 @@ def _empty_result(concert: dict) -> dict:
     }
 
 
-def _apply_rename(concert: dict, result: dict, verbose: bool):
+def _apply_rename(concert: dict, result: dict, verbose: bool,
+                  torrent_shnids: "set[int] | None" = None):
     """Rename the concert folder and update result in place."""
-    new_path = rename_folder(concert["folder"], result, verbose=verbose)
+    new_path = rename_folder(concert["folder"], result, verbose=verbose,
+                             torrent_shnids=torrent_shnids)
     if new_path:
         result["renamed_to"] = new_path.name
         result["folder"]     = str(new_path)
@@ -188,12 +191,46 @@ def main():
                         help="Verify matches against etreedb checksum bodies")
     parser.add_argument("--errors-only", action="store_true",
                         help="Only output not-found, failed, and ambiguous results")
+    parser.add_argument(
+        "--torrent-dir", metavar="DIR",
+        help="Torrent folder to check for existing SHNIDs (two levels deep)",
+    )
+    parser.add_argument(
+        "--build-index", action="store_true",
+        help="Build/rebuild the torrent SHNID index and exit",
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument(
         "--delay", type=float, default=0.5, metavar="SECONDS",
         help="Delay between API calls (default: 0.5s)",
     )
     args = parser.parse_args()
+
+    # Handle --build-index
+    index_path = index_path_default()
+    if args.build_index:
+        torrent_dir = Path(args.torrent_dir).expanduser() if args.torrent_dir else None
+        if not torrent_dir:
+            # Try loading existing index to get the stored path
+            try:
+                _, stored_dir = load_index(index_path)
+                torrent_dir = Path(stored_dir)
+            except FileNotFoundError:
+                print("ERROR: --build-index requires --torrent-dir on first run.",
+                      file=sys.stderr)
+                sys.exit(1)
+        build_index(torrent_dir, index_path, verbose=args.verbose)
+        sys.exit(0)
+
+    # Load torrent index if available
+    torrent_shnids: set[int] | None = None
+    if args.torrent_dir:
+        try:
+            torrent_shnids, _ = load_index(index_path)
+            print(f"Torrent index loaded: {len(torrent_shnids)} SHNIDs.",
+                  file=sys.stderr)
+        except FileNotFoundError as e:
+            print(f"WARNING: {e}", file=sys.stderr)
 
     root = Path(args.folder).expanduser().resolve()
     if not root.is_dir():
@@ -233,7 +270,8 @@ def main():
                 result["lookup_error"] = str(exc)
 
             if args.rename:
-                _apply_rename(concert, result, verbose=args.verbose)
+                _apply_rename(concert, result, verbose=args.verbose,
+                              torrent_shnids=torrent_shnids)
 
             if i < len(concerts):
                 time.sleep(args.delay)
