@@ -196,13 +196,23 @@ def resolve(
 
 
 def candidate_hash_sets(candidates: dict[str, dict]) -> dict[str, set[str]]:
-    """Extract the combined hash set for each candidate from all its bodies."""
+    """
+    Extract the combined hash set for each candidate from its specific bodies.
+
+    Excludes orig-shn-md5 — that body may be shared between multiple sources
+    (e.g. 225 and 5436 share the same audio but 225 has extra filler tracks in
+    orig-shn-md5). Using orig-shn-md5 in subset comparison would incorrectly
+    make 5436 appear as a subset of 225.
+    """
+    _SKIP_FOR_SUBSET = {"orig-shn-md5"}
     result: dict[str, set[str]] = {}
     for shnid_str, node in candidates.items():
         all_hashes: set[str] = set()
         for edge in node.get("checksums", {}).get("edges", []):
+            desc = edge["node"].get("description", "").lower()
+            if desc in _SKIP_FOR_SUBSET:
+                continue
             body = edge["node"].get("body", "")
-            desc = edge["node"].get("description", "")
             md5, ffp, st5 = extract_hashes(body, desc, use_st5=True)
             all_hashes |= md5 | ffp | st5
         result[shnid_str] = all_hashes
