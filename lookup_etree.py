@@ -126,6 +126,7 @@ def lookup_shnid(
 
     edges: list = []
     probe_hash = probe_filename = probe_type = None
+    network_error: Optional[str] = None
 
     for probe_hash, probe_filename, probe_type in probes:
         if verbose:
@@ -135,7 +136,9 @@ def lookup_shnid(
         except RuntimeError as exc:
             if verbose:
                 print(f"    API error: {exc}")
+            network_error = str(exc)
             continue
+        network_error = None  # this probe succeeded at the network level
         queries_made += 1
         edges = data.get("data", {}).get("checksums", {}).get("edges", [])
         if edges:
@@ -146,6 +149,10 @@ def lookup_shnid(
             print(f"    No match with {probe_type} — trying next.")
 
     if not edges:
+        if network_error:
+            if verbose:
+                print(f"    All probes failed due to network error: {network_error}")
+            raise RuntimeError(f"network error during probe: {network_error}")
         if verbose:
             print("    No match in etreedb.")
         return None

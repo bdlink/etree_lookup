@@ -18,11 +18,20 @@ from api import graphql, SOURCE_QUERY, source_to_meta
 def extract_upgrade_shnid(comments: str) -> Optional[int]:
     """
     Parse a SHNID from an upgrade link in Source.comments HTML.
+
+    Handles both known etreedb link formats:
+        <a href="/shninfo_detail.php?shnid=89003">upgrade</a>
+        <a href= "/shn/74220">upgrade</a>
+        <a href= "/shninfo_detail.php?shnid=84826">upgrade now in circulation</a>
+
+    Matches any anchor whose text starts with 'upgrade' (case-insensitive).
     Returns the SHNID as int, or None if no upgrade link is present.
     """
     if not comments:
         return None
-    m = re.search(r'shnid=(\d+)[^>]*>\s*upgrade\s*<', comments, re.IGNORECASE)
+    m = re.search(
+        r'href=\s*"/(?:shninfo_detail\.php\?shnid=|shn/)(\d+)"[^>]*>\s*upgrade',
+        comments, re.IGNORECASE)
     return int(m.group(1)) if m else None
 
 

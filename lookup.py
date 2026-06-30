@@ -284,19 +284,36 @@ def main():
         else:
             if args.verbose:
                 print(f"\n[{i}/{len(concerts)}] {concert['folder_name']}")
-            try:
-                match = lookup_shnid(
-                    concert["checksums"],
-                    verbose=args.verbose,
-                    precise=args.precise,
-                    inter_query_delay=args.delay,
-                )
-                if match:
-                    result.update(match)
-                else:
-                    result["lookup_error"] = "not found in etreedb"
-            except Exception as exc:
-                result["lookup_error"] = str(exc)
+            match = None
+            last_exc = None
+            for attempt in range(3):
+                try:
+                    match = lookup_shnid(
+                        concert["checksums"],
+                        verbose=args.verbose,
+                        precise=args.precise,
+                        inter_query_delay=args.delay,
+                    )
+                    last_exc = None
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    is_network = "network error" in str(exc) or "timed out" in str(exc).lower()
+                    if is_network and attempt < 2:
+                        backoff = args.delay * (2 ** (attempt + 1))
+                        if args.verbose:
+                            print(f"    Retry {attempt + 1}/2 after network error, "
+                                  f"waiting {backoff:.1f}s…")
+                        time.sleep(backoff)
+                        continue
+                    break
+
+            if last_exc is not None:
+                result["lookup_error"] = str(last_exc)
+            elif match:
+                result.update(match)
+            else:
+                result["lookup_error"] = "not found in etreedb"
 
             if args.rename:
                 _apply_rename(concert, result, verbose=args.verbose,
