@@ -250,17 +250,32 @@ def _compare_bodies(
         return order.get(desc, 99)
     sorted_bodies = sorted(bodies, key=_body_sort_key)
 
+    # Only defer to Pass 2 when there's a genuine multi-disc split (more than
+    # one distinct d-numbered description). A lone "d1" body with no "d2" etc.
+    # is just this candidate's only body and should be checked normally —
+    # otherwise it would never be tested at all (Pass 2's union only fires
+    # when there's more than one disc group).
+    _disc_descs = {d for d, _ in bodies if is_disc_split([d])}
+    _multi_disc = len(_disc_descs) > 1
+
     matched_desc = ""
     for desc, body in sorted_bodies:
         cand_md5, cand_ffp, cand_st5 = extract_hashes(body, desc, use_st5=True)
         any_cand_md5 |= cand_md5
         any_cand_ffp |= cand_ffp
         any_cand_st5 |= cand_st5
+        if _multi_disc and is_disc_split([desc]):
+            # A single disc's body only covers part of the concert — comparing
+            # it alone against the full local hash set will always look like
+            # local has "extra" tracks (the other discs). Defer entirely to
+            # Pass 2, which unions all disc bodies before comparing.
+            continue
         result = _check_one(cand_md5, cand_ffp, cand_st5,
                             local_md5, local_ffp, local_st5)
         if result.matched:
             matched_desc = desc
-            return MatchDetail(result.match_type, [], [], match_description=desc)
+            return MatchDetail(result.match_type, result.missing, [],
+                                match_description=desc)
         best_failure.update(result)
 
     # Pass 2: try union of disc-split bodies
@@ -285,7 +300,8 @@ def _compare_bodies(
                             local_md5, local_ffp, local_st5)
         if result.matched:
             disc_descs = "+".join(sorted(disc_groups))
-            return MatchDetail(result.match_type, [], [], match_description=disc_descs)
+            return MatchDetail(result.match_type, result.missing, [],
+                                match_description=disc_descs)
         best_failure.update(result)
 
     # Trust probe only when no comparable pair exists on both sides
