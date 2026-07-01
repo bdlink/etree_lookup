@@ -88,7 +88,7 @@
 ### Checksum File Handling (`parsers.py`)
 
 **Priority (preferred, `find_checksum_files()`):**
-1. `.ffp`
+1. `.ffp` / `.ffp.txt` (fingerprint wrapped in `.txt` — same audio-only reliability tier as plain `.ffp`, added this session, see Bug F1 below)
 2. `.md5` / `.shn.md5` (excluding tagged variants)
 3. `.st5` (plain, not compound)
 
@@ -103,6 +103,10 @@
 - `.fixed-flac.st5` → NOT ignored (treated as plain st5, used for probe)
 
 **`.shn.st5.txt` files**: Parsed as st5 via compound extension check.
+
+**`.ffp.txt` files**: Parsed as ffp via compound extension check (mirrors `.st5.txt`). Added this session — was previously completely invisible to both `find_checksum_files()` and `find_fallback_checksum_files()`; see Bug F1.
+
+**Plain md5 is container/tag-format sensitive**: unlike shntool fingerprints (`.ffp`/`.st5`, audio-only), plain md5 hashes the whole file, so a `.shn` and `.flac` of the same audio — or two different tagging/encoder passes of the same `.flac` — produce *different* md5 values. This matters a lot; see the flac-md5 investigation section below.
 
 **Silence marker `S`**: Shntool uses `S` instead of a hash for silent tracks. Parser skips these lines silently (no hash extracted).
 
@@ -246,9 +250,9 @@ Results: 12/19 matched, 4 ambiguous, 1 precise-failed, 0 extra-local, 2 not foun
 | `gd77-02-17.16745.sbd.outtakes.sbeok.flac16` | Torrent | probe-trust elimination of 147313 |
 | `gd79-12-05.19418.aud.warner.sbeok.t-flac16` | Torrent | taggged.md5 ignored, flac.st5 fallback, probe-trust elimination of 34874 |
 
-**Expected results**: 12/19 matched, 4 ambiguous, 1 precise-failed, 2 not found
+**Confirmed results (this session, post bugs #9/#10 fixes)**: 13/19 matched, 3 ambiguous, 1 precise-failed, 2 not found. (The old "12/19, 4 ambiguous" figure predates this log — it was already stale before this session, written before probe-trust elimination and the bogus-date filter were finished. `87034`, `16745`, and `19418` correctly resolve to single matches instead of staying ambiguous against their compilation/composite counterparts.)
 
-**Gaps**: `--rename` tested manually. `--precise unverifiable` not seen in practice.
+**Gaps**: `--rename` still only tested manually, not through the formal suite. `--precise unverifiable` still not observed in real data — code path may be unreachable; worth a synthetic test. `14913`/`5339`/`80719` (`+extra-local` cases) and disc-split cases need a fresh `--precise --verbose` run once the pending flac-md5 fixes (see below) are actually applied, since neither was active during this session's test runs.
 
 ---
 
@@ -349,12 +353,80 @@ From folder name:
 
 ---
 
+## New Session: flac-md5 Investigation
+
+Triggered by running the 19-folder test suite: found the `+extra-local` warning (bug #8, above) was never actually printing, which led to discovering that plain md5 of `.flac` files is fundamentally unreliable for etreedb matching. What started as one bug turned into a multi-part investigation. Status of each piece below — **some fixes are written but NOT yet applied**, tracked explicitly since patch delivery mistakes happened this session (see Collaboration Notes).
+
+### Confirmed APPLIED this session
+
+**Bug #9 — `+extra-local` warning never printed (`resolution.py`)**
+`_compare_bodies()` built the final `MatchDetail` with `missing` hardcoded to `[]` at both return sites, even when the match was `+extra-local` and `result.missing` held the real extra-hash list. Since `_MatchState.matched` only checks `match_type is not None`, the extra-local result still returned successfully — just with its `missing` list silently discarded before it ever reached `output.py`. Fixed: both return sites now pass `result.missing` through.
+
+**Bug #10 — disc-split false positive (`resolution.py`)**
+`_compare_bodies()` Pass 1 checked each etreedb body individually, including `d1`/`d2` disc-split bodies one at a time, *before* Pass 2's proper union logic ever ran. A lone `d1` body naturally looks like local has "extra" tracks (the `d2` tracks), which tripped `+extra-local` and returned immediately — so multi-disc candidates never reached the correct union comparison. Fixed: disc-labelled bodies are now skipped in Pass 1 (deferred entirely to Pass 2) whenever more than one distinct disc description exists. Guarded so a genuinely lone `d1`-only body (no `d2` etc.) still gets checked normally in Pass 1 — otherwise it would never be tested at all.
+
+**Bug F1 — `.ffp.txt` files completely invisible to discovery (`parsers.py`)**
+Neither `find_checksum_files()` nor `find_fallback_checksum_files()` recognized `*.ffp.txt` — not even as a fallback. Folders using this naming convention (confirmed real-world example: `gd79-11-02.mtx.seamons.fingerprint.ffp.txt`) had their best available checksum source silently skipped entirely. Fixed: `.ffp.txt` is now discovered and parsed identically to plain `.ffp` (same reliability tier, not a fallback — it's the same audio-only format, just text-wrapped), mirroring how `.st5.txt` was already handled. Confirmed working: re-running `check_flac_md5_only.py` on the full Torrent collection dropped the "flac-md5-only" folder count from 41 to 28 (13 folders recovered a real `.ffp`/`.ffp.txt` source).
+
+### Also confirmed applied this session (Bug #11 and the flac-md5 last-resort design)
+
+**Bug #11 — flac-md5 and shn-md5 conflated into one local hash set (`resolution.py`, `lookup_etree.py`)**
+Root cause of the original `14913` false `+extra-local`: a folder can ship both a shn-referencing `.md5` and a flac-referencing `.md5` (real example: `gd68-03-31.shn.md5` + `gd68-03-31.aud.14913.md5`, confirmed via `cat` — completely different hash values for the same 3 tracks, e.g. `45594474...` vs `02719149...`). `parsers.py` tags both as the generic type `"md5"` with no format distinction, so they get unioned into one flat `local_md5` set. Comparing that against a single-format etreedb body (e.g. `shn-md5`) makes the flac-md5 hashes look like "extra local tracks" that aren't real.
+
+Designed fix: `_split_md5_by_format()` (new, in `lookup_etree.py`) splits local md5 hashes by referenced audio format (`.shn` vs `.flac`). `resolve()`/`_compare_bodies()`/`_check_one()` (resolution.py) now accept optional `local_md5_shn`/`local_md5_flac` and use whichever matches a given etreedb body's declared format, instead of the flat union. Verified against real `14913` hash values with a simulated etreedb response — reproduces the bug without the fix, resolves cleanly (`exact md5 match`, no extra) with it.
+
+**Status: CONFIRMED APPLIED.** First delivery of this fix (`md5_format_split_fix.patch`) was incomplete — it only captured the `lookup_etree.py` half via a `git diff` mistake, missing the `resolution.py` half entirely. User correctly never applied that broken patch. Superseded by full-file replacements of `resolution.py` / `lookup_etree.py` / `output.py`, which the user downloaded and committed — this fix is live.
+
+### Design decision: flac-md5 as absolute last resort
+
+Considered fully excluding flac-md5 from matching (plain md5 is container/tag-format sensitive — a match only confirms "byte-identical to a specific tagged release," not audio identity, unlike `.ffp`/`.st5` which hash audio data only). Quantified the real-world impact before deciding, using new diagnostic scripts (see below) against the full `~/Music/Torrent` collection (5589 folders):
+
+| Bucket | Count | Meaning |
+|--------|-------|---------|
+| A. real-preferred (ffp/ffp.txt/shn-md5/st5) | 4274 | unaffected either way |
+| D. fallback-only (already works) | 1268 | unaffected either way |
+| B. **hidden-fallback bug** | 9 | has flac-md5 *and* an unused `.flac.st5`/`.shn.st5`/`.st5.txt` fallback — see Bug F2 below |
+| C. flac-md5-only, no fallback at all | 19 | would go from "some signal" to "nothing" under full exclusion |
+| E. nothing usable | 2 | out of scope |
+
+Also ran the live lookup against the 41 (later 28, after Bug F1 fix) flac-md5-only-classified folders (`check_flac_md5_folder_status.py`) to see what flac-md5 matches currently look like: most "succeeded" with a bare `md5` label indistinguishable from a real match, one showed a genuine `+extra-local`, and a comment on a matched SHNID (`105530`, matched from folder `gd79-10-28.150530...`) explicitly said *"this is a tagged version of"* another SHNID — direct confirmation that flac-md5 matches can resolve to a derivative/tagged etreedb entry rather than the canonical one. ~29% of the probed folders came back `NOT FOUND` despite (presumably) being real concerts — likely false negatives from tagging/encoder differences versus whatever etreedb hashed.
+
+**Decision**: keep flac-md5, but as absolute last resort only, with output that can never be confused with a real match.
+
+Designed fix (in `resolution.py` / `lookup_etree.py` / `output.py`):
+- Probe order fixed: shn-md5 (or unrecognized-format md5) → ffp → st5 → flac-md5 tried last. Previously any md5 hash — shn- or flac-referenced — could win the probe slot arbitrarily, since both were lumped as type `"md5"`.
+- Body-check order in `_compare_bodies()` fixed: `flac-md5` moved to strictly last position (previously it was tried *second*, right after `shn-md5` — backwards for a last-resort format).
+- New distinct match_type label `"md5-flac"` (and `"md5-flac+extra-local"`) — never just `"md5"` — so it can't silently masquerade as a real audio-verified match. `output.py` prints it as: `Precise: whole-file md5 match ✓  ⚠ UNVERIFIED — flac/tag-dependent, not an audio match`.
+- Verified via synthetic tests: a flac-md5-only candidate still resolves (as `md5-flac`); a candidate with both `shn-md5` and `flac-md5` bodies available always prefers the real `shn-md5` match regardless of body order in the API response.
+
+**Status: CONFIRMED APPLIED** — same delivery (full-file replacement of `resolution.py`, `lookup_etree.py`, `output.py`), downloaded and committed by the user. Next step: rerun `--precise --verbose` on the test suite and `check_flac_md5_folder_status.py` on the flac-md5-only folder list to confirm real-world behavior — e.g. `14913` should now show a clean `exact md5 match` with no false extra-local warning, and any genuinely flac-md5-only matches should now print with the `⚠ UNVERIFIED` label instead of looking like a real match.
+
+### Bug found, NOT yet fixed
+
+**Bug F2 — flac-md5 presence blocks fallback discovery of better files (`lookup.py` / `parsers.py`)**
+`scan_concerts()` only calls `find_fallback_checksum_files()` when `find_checksum_files()` returns completely empty. A folder with a weak flac-md5 file (which `find_checksum_files()` does return, since `.md5` is a preferred-tier extension) never gets its `.flac.st5`/`.shn.st5`/`.st5.txt` fallback looked at, even though that fallback would be far more reliable (audio-only, like `.ffp`). Real example: `gd78-05-13.17406.aud-sonyECM33p.rolfe-weiner.sbeok.t-flac16` — has both a flac-md5 file (currently used, unreliable) and a `.flac.st5` + `.shn.st5.txt` (currently invisible, would be reliable). Confirmed via `inventory_checksum_types.py`: 9 folders in the Torrent collection affected (bucket B above).
+
+**Not yet designed or implemented.** Conceptual fix: fallback discovery should trigger whenever the *only* preferred-tier file present is flac-md5, not only when zero preferred-tier files exist at all.
+
+### Diagnostic scripts (added this session, in repo root)
+
+Read-only, no file modifications. `check_flac_md5_folder_status.py` makes live etreedb API calls; the other two are local-only.
+
+- **`inventory_checksum_types.py`** — classifies every folder in a collection into buckets A–E (see table above) by which checksum-file categories actually exist on disk, independent of the current preferred/fallback gating logic. This is what surfaced Bug F2.
+- **`check_flac_md5_only.py`** — reports folders that would have zero usable checksum source if flac-md5 were excluded from matching entirely (no ffp, no st5, no shn-md5).
+- **`check_flac_md5_folder_status.py`** — runs the real lookup against a specific list of folders, reports found/ambiguous/not-found and match type. Used to see what current (pre-fix) flac-md5 matches actually look like.
+
+`diagnostics/` subfolder reorg considered, intentionally deferred (repo has no subfolder structure yet, not worth the churn for 3 scripts) — see Deferred Features.
+
+---
+
 ## Collaboration Notes
 
 - **sed is unreliable for Python source edits** — use `str_replace` tool or heredoc rewrite. Mac native sed differs from GNU sed; even GNU sed struggles with complex regex escaping in Python source.
 - **Verbose test runs** reveal exact code path taken
 - **curl output** for direct API debugging
 - **Bogus-date pattern `??/??/39`** is reliable compilation signal — all JOTW and GD Compilations aggregator entries use it
+- **Multi-file patch generation needs verification before delivery** — this session, a `git diff -- fileA fileB` patch was delivered to the user missing fileB's hunk entirely (silently — the command didn't error, it just diffed against a stale baseline). Caught only because the user tested against real data and noticed a case that should've been fixed wasn't. Lesson: always `cat`/inspect a generated multi-file patch's `diff --git` headers before calling it done, especially after any stash/commit-based isolation trickery.
 
 ---
 
@@ -365,6 +437,7 @@ From folder name:
 
 ### Deferred Features
 - **Recursive folder scanning**: Replace `--depth 1|2` with recursive walk. Any folder with checksum file = concert. "Shallowest folder wins" if nesting. Warn on nested checksum folders. Same logic for `--build-index`. Implement as test script first.
+- **`diagnostics/` folder reorg**: repo currently has no subfolder structure, so the three standalone diagnostic scripts (`inventory_checksum_types.py`, `check_flac_md5_only.py`, `check_flac_md5_folder_status.py`) live in the repo root alongside the production modules. Moving them into a `diagnostics/` folder would be cleaner but is intentionally deferred — repo is small enough that it's not worth the churn yet.
 
 ---
 
