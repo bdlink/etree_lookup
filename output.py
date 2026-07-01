@@ -48,17 +48,20 @@ FIELDS = [
 # ---------------------------------------------------------------------------
 
 def _write_text(results: list[dict], f: IO, errors_only: bool = False):
-    found     = sum(1 for r in results if r.get("shnid") and not r.get("ambiguous") and not r.get("precise_failed"))
-    ambiguous = sum(1 for r in results if r.get("ambiguous"))
-    failed    = sum(1 for r in results if r.get("precise_failed"))
-    not_found = sum(1 for r in results if not r.get("shnid") and not r.get("ambiguous") and r.get("lookup_error"))
+    found       = sum(1 for r in results if r.get("shnid") and not r.get("ambiguous") and not r.get("precise_failed"))
+    ambiguous   = sum(1 for r in results if r.get("ambiguous"))
+    failed      = sum(1 for r in results if r.get("precise_failed"))
+    warned      = sum(1 for r in results if r.get("precise_extra_local"))
+    not_found   = sum(1 for r in results if not r.get("shnid") and not r.get("ambiguous") and r.get("lookup_error"))
     f.write(f"\n{'='*60}\n")
+    warn_str = f", {warned} extra-local" if warned else ""
     f.write(f"Results: {found}/{len(results)} matched, {ambiguous} ambiguous, "
-            f"{failed} precise-failed, {not_found} not found\n")
+            f"{failed} precise-failed{warn_str}, {not_found} not found\n")
     f.write(f"{'='*60}\n\n")
 
     def _is_error(r):
         return (r.get("ambiguous") or r.get("precise_failed") or
+                r.get("precise_extra_local") or
                 not r.get("shnid") or r.get("lookup_error"))
     display = [r for r in results if not errors_only or _is_error(r)]
     for r in display:
@@ -149,10 +152,21 @@ def _write_text(results: list[dict], f: IO, errors_only: bool = False):
                 f.write(f"Note   : matched via st5 checksums only\n")
             if r.get("precise_used"):
                 pm = r.get("precise_match")
+                extra_local = r.get("precise_extra_local") or []
                 if pm == "probe":
                     f.write(f"Precise: unverifiable — no comparable hash type in etreedb\n")
                 elif pm == "ffp↔st5":
                     f.write(f"Precise: exact ffp match ✓ (via etreedb shntool fingerprints)\n")
+                elif pm and "+extra-local" in pm:
+                    base = pm.replace("+extra-local", "")
+                    f.write(f"Precise: exact {base} match ✓\n")
+                    if extra_local:
+                        f.write(f"Warning: local has {len(extra_local)} track(s) not in etreedb "
+                                f"(possible filler):\n")
+                        for h in extra_local[:10]:
+                            f.write(f"         {h[:12]}\n")
+                        if len(extra_local) > 10:
+                            f.write(f"         … ({len(extra_local) - 10} more)\n")
                 elif pm:
                     f.write(f"Precise: exact {pm} match ✓\n")
                 else:

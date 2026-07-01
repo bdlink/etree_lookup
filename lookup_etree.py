@@ -73,11 +73,12 @@ def _build_empty_result() -> dict:
         "matched_hash_type": None,
         "queries_made":     0,
         "st5_only":         False,
-        "precise_used":     False,
-        "precise_match":    None,
-        "precise_failed":   False,
-        "precise_missing":  [],
-        "precise_extra":    [],
+        "precise_used":        False,
+        "precise_match":       None,
+        "precise_failed":      False,
+        "precise_missing":     [],
+        "precise_extra":       [],
+        "precise_extra_local": [],   # local tracks not in etreedb (filler warning)
         "upgrades":         [],
         "lookup_error":     None,
     }
@@ -217,6 +218,29 @@ def lookup_shnid(
             )
             survivors = set(precise_survivors.keys())
 
+            # If any candidate matched via a real hash comparison, drop
+            # candidates that only passed via probe trust.  A compilation
+            # SHNID (e.g. 105772, 147313) may contain one of the probe
+            # hashes in its body but have no comparable hash type for a
+            # proper comparison — probe trust would otherwise promote it
+            # to ambiguous alongside the real match.
+            _REAL_MATCH_PREFIXES = ("md5", "ffp", "st5")
+            has_real_match = any(
+                (precise_survivors[s].match_type or "").startswith(_REAL_MATCH_PREFIXES)
+                for s in survivors
+            )
+            if has_real_match:
+                probe_only = {
+                    s for s in survivors
+                    if precise_survivors[s].match_type == "probe"
+                }
+                if probe_only and len(survivors) - len(probe_only) >= 1:
+                    if verbose:
+                        for s in probe_only:
+                            print(f"    SHNID {s} eliminated: probe-trust only "
+                                  f"(real hash match exists elsewhere)")
+                    survivors -= probe_only
+
             if not survivors:
                 # All candidates failed — return best candidate with failure detail
                 if verbose:
@@ -244,10 +268,28 @@ def lookup_shnid(
     shnid_list = sorted(survivors, key=lambda s: int(s) if s.isdigit() else s)
     ambiguous  = len(shnid_list) != 1
 
-    # Subset resolution: if one surviving candidate's hash set is a strict
-    # subset of another's, the superset is the more complete source.
-    # Also check failed candidates — a failed candidate (too many hashes)
-    # that is a superset of a survivor indicates the survivor is a filler.
+    # Bogus-date filter: compilation/aggregator SHNIDs on etreedb often have
+    # date ??/??/39 or similar placeholder dates.  If any candidate has a
+    # real date and another has a bogus date (contains '??'), eliminate the
+    # bogus-date candidate.
+    if ambiguous:
+        def _is_bogus_date(s):
+            return "??" in (initial_metadata.get(s, {}).get("date") or "")
+        bogus_dated   = {s for s in shnid_list if _is_bogus_date(s)}
+        real_dated    = {s for s in shnid_list if not _is_bogus_date(s)}
+        if bogus_dated and real_dated:
+            if verbose:
+                for s in bogus_dated:
+                    d = initial_metadata.get(s, {}).get("date", "?")
+                    print(f"    SHNID {s} eliminated: bogus date {d!r} "
+                          f"(compilation or aggregator)")
+            shnid_list = [s for s in shnid_list if s not in bogus_dated]
+            ambiguous  = len(shnid_list) != 1
+
+    # Subset resolution: if one surviving candidate's hash set strictly
+    # contains another's, it is a superset (e.g. a compilation) and should
+    # be eliminated in favour of the more specific entry whose hashes
+    # exactly match the local files.
     subset_note: dict[str, str] = {}  # shnid_str -> explanation
     if ambiguous and needs_resolution:
         hash_sets = candidate_hash_sets(bulk_nodes)
@@ -258,11 +300,11 @@ def lookup_shnid(
                     continue
                 ha = hash_sets.get(a, set())
                 hb = hash_sets.get(b, set())
-                if ha and hb and ha < hb:  # a strictly contained in b
-                    to_remove.add(a)
-                    subset_note[a] = f"subset of {b}"
+                if ha and hb and ha < hb:  # a strictly contained in b → b is superset
+                    to_remove.add(b)
+                    subset_note[b] = f"superset of {a} (compilation or aggregate)"
                     if verbose:
-                        print(f"    SHNID {a} hash set ⊂ SHNID {b} — eliminating {a}")
+                        print(f"    SHNID {a} hash set ⊂ SHNID {b} — eliminating {b} (superset)")
         if to_remove and len(shnid_list) - len(to_remove) >= 1:
             shnid_list = [s for s in shnid_list if s not in to_remove]
             ambiguous = len(shnid_list) != 1
@@ -337,6 +379,8 @@ def lookup_shnid(
             match_type = survivor_detail.match_type
             result["precise_match"] = match_type if match_type != "probe" else None
             result["precise_unverifiable"] = (match_type == "probe")
+            if "+extra-local" in (match_type or ""):
+                result["precise_extra_local"] = survivor_detail.missing
         else:
             result["precise_failed"] = True
             result["precise_missing"] = failure_detail.missing if failure_detail else []

@@ -23,6 +23,7 @@ def extract_upgrade_shnid(comments: str) -> Optional[int]:
         <a href="/shninfo_detail.php?shnid=89003">upgrade</a>
         <a href= "/shn/74220">upgrade</a>
         <a href= "/shninfo_detail.php?shnid=84826">upgrade now in circulation</a>
+        <a href ="/shninfo_detail.php?shnid=2199">upgrade</A>  (space before =)
 
     Matches any anchor whose text starts with 'upgrade' (case-insensitive).
     Returns the SHNID as int, or None if no upgrade link is present.
@@ -30,7 +31,7 @@ def extract_upgrade_shnid(comments: str) -> Optional[int]:
     if not comments:
         return None
     m = re.search(
-        r'href=\s*"/(?:shninfo_detail\.php\?shnid=|shn/)(\d+)"[^>]*>\s*upgrade',
+        r'href\s*=\s*\"/(?:shninfo_detail\.php\?shnid=|shn/)(\d+)\"[^>]*>\s*upgrade',
         comments, re.IGNORECASE)
     return int(m.group(1)) if m else None
 

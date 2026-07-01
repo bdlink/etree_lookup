@@ -141,13 +141,22 @@ def parse_st5(path: Path) -> list[tuple[str, str, str]]:
 #   .tagged.md5  — whole-file md5 of tagged flac (not track-level)
 #   .flac.st5    — shntool fingerprints of flac files (st5 format)
 #   .shn.st5     — shntool fingerprints of shn files
-_IGNORED_SUFFIXES = {".tagged.md5", ".flac.st5", ".shn.st5"}
+_IGNORED_ST5_SUFFIXES = {".flac.st5", ".shn.st5"}
 
 
 def _is_ignored_checksum(path: Path) -> bool:
-    """Return True if this file has a compound suffix we should skip."""
+    """Return True if this file has a compound suffix we should skip.
+
+    Catches .tagged.md5 and common misspellings (e.g. .taggged.md5) by
+    checking whether 'tag' appears anywhere in the stem of a .md5 file.
+    """
     name = path.name.lower()
-    return any(name.endswith(s) for s in _IGNORED_SUFFIXES)
+    if any(name.endswith(s) for s in _IGNORED_ST5_SUFFIXES):
+        return True
+    # Any .md5 whose stem contains 'tag' is a tagged whole-file md5
+    if name.endswith(".md5") and "tag" in name[:-4]:
+        return True
+    return False
 
 
 def find_checksum_files(folder: Path) -> list[Path]:

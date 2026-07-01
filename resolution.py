@@ -351,6 +351,7 @@ def _check_one(
     Returns an empty state if no pair exists on both sides (trust probe).
     """
     state = _MatchState()
+    extra_local_state: Optional["_MatchState"] = None
 
     for local_set, cand_set, type_name in [
         (local_ffp, cand_ffp, "ffp"),        # ffp body explicitly labelled ffp
@@ -365,7 +366,21 @@ def _check_one(
         if not missing and not extra:
             state.match_type = type_name
             return state
+        if not extra and missing:
+            # etreedb's hashes are all present locally, but local has extra
+            # tracks not known to etreedb — likely filler tracks.
+            # Don't return yet — a later pair may give a clean exact match.
+            if extra_local_state is None:
+                s = _MatchState()
+                s.match_type = f"{type_name}+extra-local"
+                s.missing = sorted(missing)
+                extra_local_state = s
+            continue
         state.update_failure(sorted(missing), sorted(extra))
+
+    # If no exact match found but we had an extra-local candidate, use it
+    if extra_local_state is not None:
+        return extra_local_state
 
     return state
 
