@@ -155,6 +155,21 @@ def _write_text(results: list[dict], f: IO, errors_only: bool = False):
                 extra_local = r.get("precise_extra_local") or []
                 if pm == "probe":
                     f.write(f"Precise: unverifiable — no comparable hash type in etreedb\n")
+                elif pm and pm.startswith("md5-flac"):
+                    # Absolute-last-resort match: plain md5 of a .flac file is
+                    # container/tag-format sensitive, so this only confirms
+                    # "byte-identical to a specific tagged release" — not
+                    # audio identity the way ffp/st5/shn-md5 does. Never
+                    # printed as an unqualified "exact match".
+                    f.write(f"Precise: whole-file md5 match ✓  "
+                            f"⚠ UNVERIFIED — flac/tag-dependent, not an audio match\n")
+                    if extra_local:
+                        f.write(f"Warning: local has {len(extra_local)} track(s) not in etreedb "
+                                f"(possible filler):\n")
+                        for h in extra_local[:10]:
+                            f.write(f"         {h[:12]}\n")
+                        if len(extra_local) > 10:
+                            f.write(f"         … ({len(extra_local) - 10} more)\n")
                 elif pm == "ffp↔st5":
                     f.write(f"Precise: exact ffp match ✓ (via etreedb shntool fingerprints)\n")
                 elif pm and "+extra-local" in pm:

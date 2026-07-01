@@ -37,6 +37,33 @@ def _split_by_type(checksums: list[tuple]) -> tuple[set[str], set[str], set[str]
     return md5, ffp, st5
 
 
+def _split_md5_by_format(checksums: list[tuple]) -> tuple[set[str], set[str]]:
+    """
+    Split local md5-type hashes by the referenced audio file's format.
+
+    Plain md5 is container-format sensitive — a .shn and .flac of the same
+    audio have different md5 values (unlike shntool fingerprints, which hash
+    audio data only). A folder can legitimately ship checksum files for both
+    formats (e.g. a shn.md5 alongside a flac-referencing .md5); unioning them
+    into one flat set would make a single-format etreedb body (e.g. shn-md5)
+    look like local has "extra" tracks when it's really just the other
+    format's hashes for the same tracks.
+
+    Returns (md5_shn, md5_flac).
+    """
+    md5_shn:  set[str] = set()
+    md5_flac: set[str] = set()
+    for h, f, t in checksums:
+        if t != "md5":
+            continue
+        lower = f.lower()
+        if lower.endswith(".shn"):
+            md5_shn.add(h)
+        elif lower.endswith(".flac"):
+            md5_flac.add(h)
+    return md5_shn, md5_flac
+
+
 def _priority_ordered(checksums: list[tuple]) -> list[tuple]:
     """
     Return checksums ordered md5 → ffp → st5, deduplicated by hash value.
@@ -113,17 +140,36 @@ def lookup_shnid(
         return None
 
     local_md5, local_ffp, local_st5 = _split_by_type(ordered)
+    local_md5_shn, local_md5_flac = _split_md5_by_format(ordered)
     st5_only = not local_md5 and not local_ffp
     queries_made = 0
 
     # ------------------------------------------------------------------
     # Step 1: probe with first available hash to get initial candidates
     # ------------------------------------------------------------------
+    # flac-referenced md5 is absolute last resort: plain md5 of a .flac file
+    # is container/tag-format sensitive (unlike shntool fingerprints), so a
+    # probe hit only confirms "byte-identical to a specific tagged release,"
+    # not audio identity. Previously any md5 hash — shn- or flac-referenced —
+    # could win the probe slot arbitrarily; now shn/unrecognized md5 goes
+    # first, flac-referenced md5 only gets tried if everything else fails.
     probes = []
-    for pref in ("md5", "ffp", "st5"):
+    shn_or_other_md5 = [
+        (h, f, t) for h, f, t in ordered
+        if t == "md5" and not f.lower().endswith(".flac")
+    ]
+    flac_md5 = [
+        (h, f, t) for h, f, t in ordered
+        if t == "md5" and f.lower().endswith(".flac")
+    ]
+    if shn_or_other_md5:
+        probes.append(shn_or_other_md5[0])
+    for pref in ("ffp", "st5"):
         pool = [(h, f, t) for h, f, t in ordered if t == pref]
         if pool:
             probes.append(pool[0])
+    if flac_md5:
+        probes.append(flac_md5[0])
 
     edges: list = []
     probe_hash = probe_filename = probe_type = None
@@ -214,6 +260,8 @@ def lookup_shnid(
             precise_survivors, precise_failures = resolve(
                 bulk_nodes, local_md5, local_ffp,
                 local_st5=local_st5 if st5_only else None,
+                local_md5_shn=local_md5_shn,
+                local_md5_flac=local_md5_flac,
                 verbose=verbose,
             )
             survivors = set(precise_survivors.keys())
