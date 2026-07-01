@@ -279,9 +279,6 @@ def _compare_bodies(
     _disc_descs = {d for d, _ in bodies if is_disc_split([d])}
     _multi_disc = len(_disc_descs) > 1
 
-    _SHN_MD5_DESCS  = {"shn-md5", "orig-shn-md5"}
-    _FLAC_MD5_DESCS = {"flac-md5"}
-
     matched_desc = ""
     for desc, body in sorted_bodies:
         cand_md5, cand_ffp, cand_st5 = extract_hashes(body, desc, use_st5=True)
@@ -294,26 +291,19 @@ def _compare_bodies(
             # local has "extra" tracks (the other discs). Defer entirely to
             # Pass 2, which unions all disc bodies before comparing.
             continue
-        # Plain md5 is container-format sensitive (unlike shntool
-        # fingerprints), so a folder shipping both a shn.md5 and a
-        # flac-referencing .md5 must not have those unioned into one set —
-        # pick the local set matching this body's known format when we can.
-        # flac-md5 gets a distinct match_type label ("md5-flac") so a match
-        # via this absolute-last-resort path is never confused with a real
-        # (shn-based) md5 match in output or ambiguity resolution.
-        desc_lower = desc.lower()
-        if desc_lower in _SHN_MD5_DESCS and local_md5_shn is not None:
-            md5_for_body = local_md5_shn
-            md5_label = "md5"
-        elif desc_lower in _FLAC_MD5_DESCS and local_md5_flac is not None:
-            md5_for_body = local_md5_flac
-            md5_label = "md5-flac"
-        else:
-            md5_for_body = local_md5
-            md5_label = "md5"
+        # local_md5_shn is tried first, local_md5_flac absolute last —
+        # handled uniformly inside _check_one regardless of what this body's
+        # etreedb description happens to be. NOT keyed off desc string: that
+        # was tried and found unreliable (a real flac-only match came back
+        # from a body not literally described "flac-md5", silently
+        # mislabelling a last-resort match as a real one). Plain md5 is
+        # container-format sensitive, so local_md5_flac can only ever
+        # numerically match a genuinely flac-format candidate body anyway —
+        # no risk of it coincidentally matching real shn-format data.
         result = _check_one(cand_md5, cand_ffp, cand_st5,
-                            md5_for_body, local_ffp, local_st5,
-                            md5_label=md5_label)
+                            local_md5, local_ffp, local_st5,
+                            local_md5_shn=local_md5_shn,
+                            local_md5_flac=local_md5_flac)
         if result.matched:
             matched_desc = desc
             return MatchDetail(result.match_type, result.missing, [],
@@ -339,7 +329,9 @@ def _compare_bodies(
         if verbose:
             print(f"    Trying disc-split union ({', '.join(sorted(disc_groups))})…")
         result = _check_one(union_md5, union_ffp, union_st5,
-                            local_md5, local_ffp, local_st5)
+                            local_md5, local_ffp, local_st5,
+                            local_md5_shn=local_md5_shn,
+                            local_md5_flac=local_md5_flac)
         if result.matched:
             disc_descs = "+".join(sorted(disc_groups))
             return MatchDetail(result.match_type, result.missing, [],
@@ -391,7 +383,8 @@ class _MatchState:
 def _check_one(
     cand_md5: set[str], cand_ffp: set[str], cand_st5: set[str],
     local_md5: set[str], local_ffp: set[str], local_st5: set[str],
-    md5_label: str = "md5",
+    local_md5_shn: Optional[set[str]] = None,
+    local_md5_flac: Optional[set[str]] = None,
 ) -> "_MatchState":
     """
     Check a single set of candidate hashes against local hashes.
@@ -403,13 +396,26 @@ def _check_one(
 
     Comparison pairs:
       local_ffp  ↔  candidate_st5   (flac ffp == shntool st5)
-      local_md5  ↔  candidate_md5   (shn/flac md5 checksums)
+      local_md5  ↔  candidate_md5   (md5 checksums — see below)
       local_st5  ↔  candidate_st5   (local st5 fallback files)
 
-    md5_label: the match_type to report for the md5 pair. Callers pass
-    "md5-flac" when local_md5 here is actually local_md5_flac (a flac-file
-    md5, container-format sensitive, absolute-last-resort — see
-    _compare_bodies) so it's never confused with a real shn-md5 match.
+    local_md5_shn / local_md5_flac: when provided (not None), md5 is
+    compared in two separate passes instead of one flat local_md5 pair —
+    local_md5_shn first (labelled "md5"), local_md5_flac absolute last
+    (labelled "md5-flac"). This is deliberately NOT keyed off etreedb's
+    declared body description — that's not reliably named in practice (a
+    real folder's flac-only match came back from a body NOT literally
+    described "flac-md5", so desc-based routing silently mislabelled a
+    last-resort match as a real one). Keying off which LOCAL set actually
+    produced the match is correct regardless of etreedb's naming: plain
+    md5 is container-format sensitive, so local_md5_flac (flac-referenced)
+    can only ever numerically match a candidate body that's genuinely
+    flac-format data — there's no risk of it coincidentally matching a
+    real shn-format body.
+
+    When local_md5_shn/local_md5_flac are both None (caller didn't split),
+    falls back to the single flat local_md5 pair, labelled "md5", for
+    backward compatibility.
 
     Tries all comparable pairs and returns the best result.
     Returns an empty state if no pair exists on both sides (trust probe).
@@ -417,12 +423,19 @@ def _check_one(
     state = _MatchState()
     extra_local_state: Optional["_MatchState"] = None
 
-    for local_set, cand_set, type_name in [
+    pairs = [
         (local_ffp, cand_ffp, "ffp"),        # ffp body explicitly labelled ffp
         (local_ffp, cand_st5, "ffp↔st5"),   # ffp fingerprints == shntool st5
-        (local_md5, cand_md5, md5_label),
-        (local_st5, cand_st5, "st5"),
-    ]:
+    ]
+    if local_md5_shn is not None or local_md5_flac is not None:
+        pairs.append((local_md5_shn or set(), cand_md5, "md5"))
+        pairs.append((local_st5, cand_st5, "st5"))
+        pairs.append((local_md5_flac or set(), cand_md5, "md5-flac"))  # absolute last resort
+    else:
+        pairs.append((local_md5, cand_md5, "md5"))
+        pairs.append((local_st5, cand_st5, "st5"))
+
+    for local_set, cand_set, type_name in pairs:
         if not (local_set and cand_set):
             continue
         missing = local_set - cand_set

@@ -226,7 +226,7 @@ Results: 12/19 matched, 4 ambiguous, 1 precise-failed, 0 extra-local, 2 not foun
 
 ---
 
-## Test Suite (19 Folders — all symlinks in `~/Music/GDCloud/test/`)
+## Test Suite (21 Folders — all symlinks in `~/Music/GDCloud/test/`)
 
 | Folder | Source | Branch Tested |
 |--------|--------|---------------|
@@ -237,7 +237,7 @@ Results: 12/19 matched, 4 ambiguous, 1 precise-failed, 0 extra-local, 2 not foun
 | `jg68-07-28.sbd.27968.flac16` | GDCloud | exact ffp match (explicit ffp body) |
 | `gd70-01-02.18120.early-late.sbd.cotsman.sbeok.flac16` | GDCloud | st5 fallback + exact st5 match |
 | `gd70-06-24.aud.lee.5339.sbeok.flac16` | GDCloud | md5+extra-local match |
-| `nrps71-02-28.sbd.80719.flac16` | GDCloud | exact md5 match |
+| `nrps71-02-28.sbd.80719.flac16` | GDCloud | exact md5 match, disc-split union (d1, d2) |
 | `gd72-07-25.sbd.cotsman.7046.sbeok.flac16` | Torrent | space-tagged.md5 ignored, flac.st5 fallback |
 | `gd72-07-26.sbd.GEMS.87034.sbeok.flac16` | Torrent | bogus-date filter eliminates 105772 |
 | `gd72-08-27.sbd.kaplan-hamilton.152.flac16` | GDCloud | exact md5 + upgrade chain (152→2199) |
@@ -248,11 +248,15 @@ Results: 12/19 matched, 4 ambiguous, 1 precise-failed, 0 extra-local, 2 not foun
 | `gd75-09-28.sbd.unknown.2562.sbefail.flac16` | GDCloud | md5 probe failed, ffp↔st5 succeeded |
 | `gd76-06-11.sbd.unknown.22803.sbeok.flac16` | GDCloud | ambiguous, needs external info |
 | `gd77-02-17.16745.sbd.outtakes.sbeok.flac16` | Torrent | probe-trust elimination of 147313 |
+| `gd79-11-02.124392.mtx.seamons.t-flac16` | Torrent | `.ffp.txt` discovery/parsing (Bug F1) — exact ffp match |
 | `gd79-12-05.19418.aud.warner.sbeok.t-flac16` | Torrent | taggged.md5 ignored, flac.st5 fallback, probe-trust elimination of 34874 |
+| `gd85-06-14.126338.akg.d'amico.flac16` | Torrent | flac-md5-only, absolute-last-resort path (Bug #11/#12) — after fix: `md5-flac` + `⚠ UNVERIFIED` label |
 
-**Confirmed results (this session, post bugs #9/#10 fixes)**: 13/19 matched, 3 ambiguous, 1 precise-failed, 2 not found. (The old "12/19, 4 ambiguous" figure predates this log — it was already stale before this session, written before probe-trust elimination and the bogus-date filter were finished. `87034`, `16745`, and `19418` correctly resolve to single matches instead of staying ambiguous against their compilation/composite counterparts.)
+**Confirmed results (this session, post bugs #9/#10 fixes, 19 folders)**: 13/19 matched, 3 ambiguous, 1 precise-failed, 2 not found. (The old "12/19, 4 ambiguous" figure predates this log — it was already stale before this session, written before probe-trust elimination and the bogus-date filter were finished. `87034`, `16745`, and `19418` correctly resolve to single matches instead of staying ambiguous against their compilation/composite counterparts.)
 
-**Gaps**: `--rename` still only tested manually, not through the formal suite. `--precise unverifiable` still not observed in real data — code path may be unreachable; worth a synthetic test. ~~`14913`/`5339`/`80719`... need a fresh run~~ **Confirmed via live `--precise --verbose` re-run**: `14913` now probes via the correct shn-referenced hash and resolves as a clean `exact md5 match` (no false extra-local); `5339` correctly shows the `+extra-local` warning for a genuine filler track; `80719` shows `Trying disc-split union (d1, d2)…` actually running and resolves cleanly. Every md5 probe in the run referenced a `.shn` file, confirming shn-md5 consistently wins the probe slot over flac-md5. Stats line (`13/19 matched, 3 ambiguous, 1 precise-failed, 1 extra-local, 2 not found`) matches the corrected baseline exactly. No `md5-flac`/`⚠ UNVERIFIED` output seen (expected — none of the 19 test folders are flac-md5-only; that path is only exercised by the bucket-C folder list).
+**21-folder run (after adding `124392` and `126338`)**: 15/21 matched, 3 ambiguous, 1 precise-failed, 1 extra-local, 2 not found. `124392` confirmed `.ffp.txt` discovery working (exact ffp match). `126338` initially exposed Bug #12 — resolved as a plain `exact md5 match` with no `⚠ UNVERIFIED` warning, silently defeating the last-resort design. **Needs a fresh re-run with the Bug #12 fix applied** to confirm `126338` now shows `md5-flac` / `⚠ UNVERIFIED` as intended — not yet done as of this log entry.
+
+**Gaps**: `--rename` still only tested manually, not through the formal suite. `--precise unverifiable` still not observed in real data — code path may be unreachable; worth a synthetic test. ~~`14913`/`5339`/`80719`... need a fresh run~~ **Confirmed via live `--precise --verbose` re-run**: `14913` now probes via the correct shn-referenced hash and resolves as a clean `exact md5 match` (no false extra-local); `5339` correctly shows the `+extra-local` warning for a genuine filler track; `80719` shows `Trying disc-split union (d1, d2)…` actually running and resolves cleanly. Every md5 probe in the run referenced a `.shn` file, confirming shn-md5 consistently wins the probe slot over flac-md5. No `md5-flac`/`⚠ UNVERIFIED` output seen in the 19-folder run (expected — none of those are flac-md5-only). See Bug #12 above for what happened once a real flac-md5-only folder (`126338`) was added.
 
 ---
 
@@ -399,7 +403,19 @@ Designed fix (in `resolution.py` / `lookup_etree.py` / `output.py`):
 - New distinct match_type label `"md5-flac"` (and `"md5-flac+extra-local"`) — never just `"md5"` — so it can't silently masquerade as a real audio-verified match. `output.py` prints it as: `Precise: whole-file md5 match ✓  ⚠ UNVERIFIED — flac/tag-dependent, not an audio match`.
 - Verified via synthetic tests: a flac-md5-only candidate still resolves (as `md5-flac`); a candidate with both `shn-md5` and `flac-md5` bodies available always prefers the real `shn-md5` match regardless of body order in the API response.
 
-**Status: CONFIRMED APPLIED** — same delivery (full-file replacement of `resolution.py`, `lookup_etree.py`, `output.py`), downloaded and committed by the user. Next step: rerun `--precise --verbose` on the test suite and `check_flac_md5_folder_status.py` on the flac-md5-only folder list to confirm real-world behavior — e.g. `14913` should now show a clean `exact md5 match` with no false extra-local warning, and any genuinely flac-md5-only matches should now print with the `⚠ UNVERIFIED` label instead of looking like a real match.
+**Status: CONFIRMED APPLIED** — same delivery (full-file replacement of `resolution.py`, `lookup_etree.py`, `output.py`), downloaded and committed by the user. Confirmed via live `--precise --verbose` re-run on the (now 19-folder) test suite: all cases behaved correctly, but see Bug #12 below — the *labeling itself* had a real bug, caught by expanding the test suite exactly as intended.
+
+### Bug #12 — flac-md5 label relied on etreedb's description string, which isn't reliably named (`resolution.py`)
+
+**How it was found**: user's own instinct to add real-world Torrent examples to the test suite before calling this session's work done — added `gd85-06-14.126338` (a confirmed bucket-C flac-md5-only folder) specifically to exercise the new last-resort path. It resolved as a plain `Precise: exact md5 match ✓` with no `⚠ UNVERIFIED` warning at all — silently defeating the entire point of the last-resort design.
+
+**Root cause**: the Bug #11 / last-resort implementation chose which local set to compare (`local_md5_shn` vs `local_md5_flac`) — and therefore which label to report — by checking whether the etreedb body's `description` field was literally `"shn-md5"`/`"orig-shn-md5"` vs `"flac-md5"`. `126338`'s matching body apparently isn't described with the exact string `"flac-md5"`, so it fell through to the generic `else` branch, which used the flat `local_md5` (which for a flac-md5-only folder happens to equal `local_md5_flac` anyway, since there's no shn-format data locally) — comparison succeeded correctly, but with the safe `"md5"` label instead of `"md5-flac"`. etreedb's description naming turned out not to be a reliable signal to key safety labeling off of.
+
+**Fix**: stopped trusting etreedb's description string for labeling entirely. `_check_one()` now tries `local_md5_shn` first and `local_md5_flac` absolute last as two independent pairs, *for every body regardless of its declared description* — the label is derived from which LOCAL set actually produced the match, not from what etreedb calls the body. This is safe because plain md5 is content-specific: `local_md5_flac` (flac-referenced hash values) can only ever numerically match a candidate body that's genuinely flac-format data; there's no risk of it coincidentally matching real shn-format data just because it's tried against every body. `_compare_bodies()` simplified accordingly — removed the `_SHN_MD5_DESCS`/`_FLAC_MD5_DESCS` desc-based branching entirely, just passes `local_md5_shn`/`local_md5_flac` uniformly to every body.
+
+**Verified**: reproduced the exact failure mode (etreedb body labeled `"shn-md5"` but containing flac-referenced hash values) and confirmed it now correctly labels `"md5-flac"`. Full regression suite re-run (real-shn-wins, both-bodies-present, flac-only with correct desc, flac-only with misleading desc, flac-only with generic/unknown desc, disc-split union) — all 6 cases pass.
+
+**Status: CONFIRMED APPLIED** — delivered as a fresh full-file `resolution.py` (only file touched this time; `lookup_etree.py`/`output.py` unchanged).
 
 ### Bug found, NOT yet fixed
 
