@@ -164,6 +164,10 @@ def find_checksum_files(folder: Path) -> list[Path]:
     Return all checksum files in folder (non-recursive) that are suitable
     for etreedb lookup. Files with ignored compound suffixes are excluded.
     Priority order: ffp > md5 > st5.
+
+    *.ffp.txt is treated as equivalent to plain .ffp — same audio-only
+    fingerprint format, just wrapped in a .txt extension (analogous to how
+    *.st5.txt is treated as equivalent to plain .st5).
     """
     found = []
     for ext in [".ffp", ".md5", ".st5"]:
@@ -171,6 +175,7 @@ def find_checksum_files(folder: Path) -> list[Path]:
             p for p in sorted(folder.glob(f"*{ext}"))
             if not _is_ignored_checksum(p)
         )
+    found.extend(sorted(folder.glob("*.ffp.txt")))
     return found
 
 
@@ -205,6 +210,7 @@ def parse_checksum_file(path: Path) -> list[tuple[str, str, str]]:
 
     Handles compound extensions:
       *.st5.txt  — treated as .st5 (shntool fingerprint wrapped in .txt)
+      *.ffp.txt  — treated as .ffp (flac fingerprint wrapped in .txt)
 
     Raises ValueError if the extension is not recognised.
     """
@@ -213,6 +219,11 @@ def parse_checksum_file(path: Path) -> list[tuple[str, str, str]]:
     # Compound extension: *.st5.txt
     if name_lower.endswith(".st5.txt"):
         entries = parse_st5(path)
+        return [(h, f, t) for h, f, t in entries if _is_audio_file(f)]
+
+    # Compound extension: *.ffp.txt
+    if name_lower.endswith(".ffp.txt"):
+        entries = parse_ffp(path)
         return [(h, f, t) for h, f, t in entries if _is_audio_file(f)]
 
     ext = path.suffix.lower()
