@@ -178,6 +178,34 @@ The `torrent_index.json` file is stored alongside the code and contains
 the path to the Torrent folder so `--build-index` can be run without
 repeating `--torrent-dir`.
 
+## Diagnostic scripts
+
+Standalone, read-only tools for investigating checksum coverage across a
+collection. None of these call the etreedb API except
+`check_flac_md5_folder_status.py` (marked below); none modify any files.
+
+| Script | Purpose |
+|--------|---------|
+| `inventory_checksum_types.py` | Classifies every folder in a collection by which checksum-file categories it actually has on disk (ffp, ffp.txt, shn-md5, flac-md5, plain st5, flac.st5/shn.st5/st5.txt fallback). Flags folders where a usable fallback file is present but currently unreachable because a weaker preferred-tier file (e.g. flac-md5) already satisfies file discovery. |
+| `check_flac_md5_only.py` | Scans a collection and reports which folders would have no usable checksum source at all if flac-referencing md5 hashes were excluded from matching (i.e. no ffp, no st5, no shn-referencing md5 — flac-md5 is the *only* thing available). |
+| `check_flac_md5_folder_status.py` | **Makes live etreedb API calls.** Runs the real lookup against a specific list of folders and reports whether each currently resolves, and by which match type — used to check what a flac-md5-only folder's current match actually looks like (real match vs. probe-trust vs. `+extra-local`) before deciding how to handle it. |
+
+```bash
+python inventory_checksum_types.py ~/Music/Torrent --depth 2
+python check_flac_md5_only.py ~/Music/GDCloud --depth 1
+python check_flac_md5_folder_status.py --root ~/Music/Torrent
+```
+
+Background: plain md5 hashes the whole file (container, tags, padding), so
+a `.shn` and `.flac` of the same audio produce *different* md5 values —
+unlike shntool fingerprints (`.ffp`/`.st5`), which hash audio data only.
+A flac-md5 match only confirms "byte-identical to a specific tagged
+release," not audio identity, and can silently misfire (false "extra local
+tracks", or point at a tagged/derivative SHNID rather than the canonical
+one). These scripts exist to quantify that risk against real collections
+before changing matching behavior. See `MEMORY_LOG.md` for the resulting
+design decisions (flac-md5 as absolute last resort, distinctly labeled).
+
 ## Extending
 
 **Add a new checksum format**: add `@register_parser(".ext", "type")` in `parsers.py`.
